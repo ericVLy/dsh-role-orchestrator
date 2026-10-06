@@ -1,0 +1,15 @@
+# Loader patch inserted by the @local/dsh-role-orchestrator bundle.
+# The row id is stable; override `config` from your profile's cordis.patch.yml
+# (a matching override replaces the complete config object).
+- insert:
+    - id: role-orchestrator
+      name: '@local/dsh-role-orchestrator'
+      config:
+        contextCompressor:
+          enabled: true
+          defaultTokenBudget: 4000
+        taskGuard:
+          enabled: true
+        approvalGate:
+          enabled: true
+          highRiskTools: []
