@@ -24,8 +24,26 @@ export const BUILTIN_RULES = [
   {
     id: 'process-control',
     level: 'high',
-    tools: ['interrupt_agent', 'agent_teams_remove_member', 'team_task_delete', 'agent_teams_delete'],
+    // NOTE: there is no `team_task_delete` tool. The built-in board deletes a
+    // task through `team_task_update` with `action: 'delete'`, which needs its
+    // own pattern rule below — a bare tool-name entry here would gate EVERY
+    // task update, including ordinary status changes.
+    tools: ['interrupt_agent', 'agent_teams_remove_member', 'agent_teams_delete'],
     reason: 'Stops or removes a running member/team; other agents may be mid-write.',
+  },
+  {
+    id: 'task-record-deletion',
+    level: 'high',
+    tools: ['team_task_update'],
+    pattern: /"action"\s*:\s*"delete"/,
+    reason: 'Deletes a shared task record; coordination history is lost and dependents would be orphaned.',
+  },
+  {
+    id: 'task-reassignment',
+    level: 'medium',
+    tools: ['team_task_update'],
+    pattern: /"action"\s*:\s*"reassign"/,
+    reason: 'Changes which member owns a task; another agent may already be working from the old owner.',
   },
   {
     id: 'destructive-shell',

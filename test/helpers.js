@@ -41,7 +41,14 @@ export function makeCtx(services = {}) {
 }
 
 /**
- * Dispatch a waterfall event through the registered listeners.
+ * Dispatch a **waterfall** event through the registered listeners.
+ *
+ * Only use this for events whose dispatch mode really is `waterfall`
+ * (`agent/pre-step`, `tools/pre-execute`, `tools/post-execute`,
+ * `system-prompt/assemble`, ...). A waterfall listener that does not call
+ * `next()` short-circuits every later listener, so composing a serial or
+ * parallel event this way silently skips listeners — use `fireAll` for those.
+ *
  * @param {*} ctx
  * @param {string} name
  * @param {unknown[]} args listener arguments before `next`
@@ -55,6 +62,17 @@ export async function fire(ctx, name, args = [], terminal = undefined) {
     return Promise.resolve(fn(...args, () => run(index + 1)))
   }
   return run(0)
+}
+
+/**
+ * Dispatch an `emit` / `parallel` / `serial` event: every listener runs, none of
+ * them receives or controls a `next`.
+ *
+ * @returns {Promise<unknown[]>} one settled value per listener
+ */
+export async function fireAll(ctx, name, args = []) {
+  const list = ctx.handlers.get(name) ?? []
+  return Promise.all(list.map((fn) => Promise.resolve(fn(...args))))
 }
 
 /** Build a normalized config from partial raw sections. */

@@ -1,6 +1,7 @@
 # Loader patch inserted by the @local/dsh-role-orchestrator bundle.
-# The row id is stable; override `config` from your profile's cordis.patch.yml
-# (a matching override replaces the complete config object).
+# The row id is stable; override `config` from your profile's cordis.patch.yml.
+# A matching override REPLACES the complete config object, so restate every key
+# you want to keep.
 - insert:
     - id: role-orchestrator
       name: '@local/dsh-role-orchestrator'
@@ -13,3 +14,16 @@
         approvalGate:
           enabled: true
           highRiskTools: []
+        orchestration:
+          enabled: true
+          # ACTIVATED. Each newly created teammate takes the first role in this
+          # list that no live agent currently holds; the role is released when the
+          # agent is disposed. The Lead is skipped (assignToLead: false) because it
+          # directs the team rather than filling a pool slot.
+          #
+          # Assignment selects which already-configured policy applies — it never
+          # grants a capability. Note that 文献检索Agent denies the `write` and
+          # `edit` tools by design, so the first teammate loses direct file edits.
+          rolePool: ['文献检索Agent', 'Claim分析Agent', '验证Agent', '审查Agent']
+          assignToLead: false
+          reserveFromMarkers: true

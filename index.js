@@ -24,6 +24,13 @@ import { registerContextCompressor } from './src/context-compressor.js'
 import { registerTaskGuard } from './src/task-guard.js'
 import { registerApprovalGate } from './src/approval-gate.js'
 import { registerStatusTool } from './src/status-tool.js'
+import { registerStatusCommand } from './src/status-command.js'
+import {
+  createOrchestrationState,
+  registerOrchestration,
+  requiredRoleFor as requiredRoleForImpl,
+  reservedTaskHints,
+} from './src/orchestration.js'
 import { serviceOf } from './src/services.js'
 import { agentIdentities } from './src/ownership.js'
 
@@ -42,12 +49,36 @@ export function apply(ctx, rawConfig) {
 
   const roleTable = buildRoleTable(config.contextCompressor)
 
+  // Module 4 state: explicit role assignments and task reservations.
+  const orchestration = createOrchestrationState()
+
   /**
-   * Resolve the role label and effective policy for an agent. Intentionally not
-   * cached: an agent's identity fields (name/role) can be populated after
-   * `agent/created`, and resolution is a handful of string comparisons.
+   * The role an agent explicitly deserves, before any pool assignment: a
+   * configured assignment or an identity field that names a known role.
+   * `undefined` means "this agent is a candidate for pool assignment".
+   */
+  const explicitRoleFor = (agent) => {
+    const resolved = resolveRole(agent, config.contextCompressor, roleTable)
+    return resolved.source === 'default' ? undefined : resolved.role
+  }
+
+  /**
+   * Resolve the role label and effective policy for an agent.
+   *
+   * Precedence: the orchestration ledger (an assignment made at `agent/created`)
+   * → configuration or identity → the default role. The ledger is consulted
+   * first so an assignment is stable for the agent's whole lifetime instead of
+   * being re-derived from fields that can change.
    */
   const resolveRoleFor = (agent) => {
+    const assigned = orchestration.roleOf(agent?.id)
+    if (typeof assigned === 'string' && assigned.length > 0) {
+      return {
+        role: assigned,
+        source: 'orchestration',
+        policy: policyFor(roleTable, assigned, config.contextCompressor.defaultTokenBudget),
+      }
+    }
     const resolved = resolveRole(agent, config.contextCompressor, roleTable)
     return {
       role: resolved.role,
@@ -59,6 +90,9 @@ export function apply(ctx, rawConfig) {
       ),
     }
   }
+
+  /** The role a task is reserved for, or undefined. Shared with the guard. */
+  const requiredRoleFor = (task) => requiredRoleForImpl(orchestration, config, task)
 
   /** Task ids owned by this agent, for the status tool. */
   const ownedTasksFor = (agent) => {
@@ -81,19 +115,40 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  // Order matters: the waterfall stops at the first listener that decides, so a
-  // deterministic ownership denial is produced before a human is asked.
+  /** Tasks reserved for this agent's role that are still open (soft dispatch). */
+  const taskHintsFor = (agent) => {
+    if (!config.orchestration.enabled) return []
+    const teams = serviceOf(ctx, 'agentTeams')
+    if (!agent || !teams || typeof teams.listTasks !== 'function') return []
+    try {
+      const { role } = resolveRoleFor(agent)
+      return reservedTaskHints(orchestration, config, role, teams.listTasks(agent))
+    } catch {
+      return []
+    }
+  }
+
+  // Creation precedes the readers so the first `resolveRoleFor` call sees an
+  // assignment. Registration order is also significant: `registerTaskGuard` is
+  // listed first so a deterministic ownership denial precedes a human prompt.
   const disposers = [
-    registerTaskGuard(ctx, config, { resolveRoleFor }),
+    registerOrchestration(ctx, config, { state: orchestration, explicitRoleFor }),
+    registerTaskGuard(ctx, config, { resolveRoleFor, requiredRoleFor }),
     registerApprovalGate(ctx, config),
-    registerContextCompressor(ctx, config, { resolveRoleFor, isEnabled: () => true }),
-    registerStatusTool(ctx, config, { resolveRoleFor, ownedTasksFor }),
+    registerContextCompressor(ctx, config, {
+      resolveRoleFor,
+      taskHintsFor,
+      isEnabled: () => true,
+    }),
+    registerStatusTool(ctx, config, { resolveRoleFor, ownedTasksFor, orchestration }),
+    registerStatusCommand(ctx, config, { resolveRoleFor, ownedTasksFor, orchestration }),
   ]
 
   ctx.logger?.info?.(
     `[role-orchestrator] active — compressor=${config.contextCompressor.enabled} ` +
       `taskGuard=${config.taskGuard.enabled} approvalGate=${config.approvalGate.enabled} ` +
-      `roles=${Object.keys(roleTable).length}`,
+      `orchestration=${config.orchestration.enabled} ` +
+      `roles=${Object.keys(roleTable).length} pool=${config.orchestration.rolePool.length}`,
   )
 
   return () => {

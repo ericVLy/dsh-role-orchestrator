@@ -51,6 +51,18 @@ export const DEFAULT_CONFIG = {
     denyOnUnavailableApproval: true,
     extraRules: [],
   },
+  orchestration: {
+    enabled: true,
+    // EMPTY BY DEFAULT: nothing is auto-assigned until an operator names the
+    // roles worth handing out. Assignment only selects which configured policy
+    // applies; it never widens access.
+    rolePool: [],
+    assignToLead: false,
+    reserveFromMarkers: true,
+    markerPattern: '\\[role:\\s*([^\\]\\s]+)\\s*\\]',
+    taskReservations: {},
+    taskCreateTools: ['team_task_create', 'agent_teams_create_task'],
+  },
 }
 
 const isPlainObject = (value) =>
@@ -111,6 +123,12 @@ export function normalizeConfig(raw) {
       source.approvalGate,
       warnings,
       'approvalGate',
+    ),
+    orchestration: mergeSection(
+      DEFAULT_CONFIG.orchestration,
+      source.orchestration,
+      warnings,
+      'orchestration',
     ),
   }
   if (!Number.isFinite(config.contextCompressor.defaultTokenBudget) ||

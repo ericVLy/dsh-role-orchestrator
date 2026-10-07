@@ -94,7 +94,7 @@ function registerForAgent(agent, deps, section, disposers) {
         // Prompt assembly must never fail because of this plugin.
         try {
           const { role, policy } = deps.resolveRoleFor(agent)
-          return buildRoleContext(agent, role, policy, section)
+          return buildRoleContext(agent, role, policy, section, deps)
         } catch {
           return ''
         }
@@ -124,11 +124,20 @@ function registerForAgent(agent, deps, section, disposers) {
  * Build the budgeted role context block.
  * @returns {string}
  */
-function buildRoleContext(agent, role, policy, section) {
+function buildRoleContext(agent, role, policy, section, deps) {
   const parts = []
   if (typeof policy.charter === 'string' && policy.charter.length > 0) {
     parts.push(policy.charter)
   }
+
+  // Project brief. A Team member is created with NO conversation history (see
+  // CORRECTIONS.md F-19), so this is the only channel that carries shared context
+  // to every role without the Lead re-explaining it per member.
+  const briefing = typeof section.briefing === 'string' ? section.briefing.trim() : ''
+  if (briefing.length > 0) {
+    parts.push(`Project brief:\n${briefing}`)
+  }
+
   const scopes = Array.isArray(policy.allowedScopes) ? policy.allowedScopes : []
   if (scopes.length > 0) {
     parts.push(`Allowed data scopes: ${scopes.join(', ')}.`)
@@ -142,6 +151,9 @@ function buildRoleContext(agent, role, policy, section) {
   const taskLine = describeOwnedTask(agent)
   if (taskLine) parts.push(taskLine)
 
+  const reservedLine = describeReservedTasks(agent, deps)
+  if (reservedLine) parts.push(reservedLine)
+
   const sections = parts.map((text, index) => ({
     name: `part-${index}`,
     text,
@@ -152,6 +164,47 @@ function buildRoleContext(agent, role, policy, section) {
   const body = fitted.text
   const capped = truncate(body, section.maxCharsPerSection)
   return `<role-context role="${escapeAttribute(role)}">\n${capped.text}\n</role-context>`
+}
+
+/**
+ * How much of a task's own description is folded into the role context.
+ * Task text travels with the task, so a member that cannot inherit the Lead's
+ * conversation still receives the acceptance criteria its work depends on.
+ */
+const RESERVED_DESCRIPTION_CHARS = 400
+const OWNED_DESCRIPTION_CHARS = 200
+
+/** A task description, budgeted and indented under its bullet. */
+function indentedDetail(task, maxChars) {
+  if (typeof task.description !== 'string') return ''
+  const text = task.description.trim()
+  if (text.length === 0) return ''
+  const cut = truncate(text, maxChars).text
+  return `\n    ${cut.replace(/\n+/g, '\n    ')}`
+}
+
+/**
+ * Open tasks reserved for this agent's role — module 4's soft dispatch.
+ *
+ * Advisory by design: the plugin tells the agent which work is *its* role's, but
+ * never claims anything on the agent's behalf. Claiming stays an explicit,
+ * auditable tool call that the task guard can still reject.
+ */
+function describeReservedTasks(agent, deps) {
+  if (typeof deps?.taskHintsFor !== 'function') return ''
+  let hints
+  try {
+    hints = deps.taskHintsFor(agent)
+  } catch {
+    return ''
+  }
+  if (!Array.isArray(hints) || hints.length === 0) return ''
+  const lines = hints.slice(0, 3).map((task) => {
+    const subject = typeof task.subject === 'string' ? task.subject : '(no subject)'
+    return `- ${task.id}: ${subject}${indentedDetail(task, RESERVED_DESCRIPTION_CHARS)}`
+  })
+  const more = hints.length > 3 ? `\n(+${hints.length - 3} more)` : ''
+  return `Tasks reserved for your role — claim the one you should do:\n${lines.join('\n')}${more}`
 }
 
 /** Summarize the task this agent currently owns, when a team ledger is present. */
@@ -173,7 +226,7 @@ function describeOwnedTask(agent) {
     const scopes = Array.isArray(task.writeScopes) && task.writeScopes.length > 0
       ? ` writeScopes=[${task.writeScopes.join(', ')}]`
       : ''
-    return `- ${task.id} (rev ${task.revision}): ${task.subject}${scopes}`
+    return `- ${task.id} (rev ${task.revision}): ${task.subject}${scopes}${indentedDetail(task, OWNED_DESCRIPTION_CHARS)}`
   })
   return `Tasks you own now:\n${lines.join('\n')}`
 }

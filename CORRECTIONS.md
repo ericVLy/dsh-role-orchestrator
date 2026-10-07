@@ -166,12 +166,84 @@ the `never` policy by returning `'rejected'`). Both modes are implemented and sw
 
 ---
 
+## F-17 · `host.call()` / `harness.handle()` for a browser half — WRONG lane
+
+These are real APIs, but they belong to the **dynamic sandbox runner** (`cordis_define` / `cordis_run`,
+`dsh-cordis-client-runner`): a definition is evaluated as an async function body and receives a façade
+including `host`. A **file-based** bundle's browser half loads through
+`window.__ModuleLoader__.load({ id, factory })` and gets `require`, its declared Client services, and
+`React` — **not** `host`. Verified against the shipped reference implementation
+`@deepseek-ai/dsh-experimental-client-ui-agent-team/lib/client.js`, whose factory returns
+`{ apply, inject: ['sessions','uiWorkspace','slots','locale'] }` and whose Host half is an empty `apply()`.
+
+## F-18 · Exposing plugin state to the UI via `wire.view` — NOT ACHIEVABLE here
+
+The sanctioned route for "the Client needs a value derived from a session" is a Host session projection with
+`wire.view`. Two independent blockers make it unavailable to this plugin:
+
+1. **`ProjectionDefinition` requires Zod schemas.** The verified contract is
+   `{ key, stateSchema: ZodType<S>, init, apply, wire: { viewSchema: ZodType, view }, stateVersion }`.
+   A profile-installed bundle cannot resolve `zod` (see F-7), so the definition cannot be constructed.
+2. **Projection units are log-derived and must stay pure.** `apply(state, event)` is synchronous and pure,
+   `wire.view` results are compared with `Object.is` to suppress publication, and the platform's own notes
+   flag "an `apply` that blocks or reads torn non-session state" as a review concern. This plugin's roles and
+   reservations live in a process-local ledger, not in session events, so publishing them through a unit
+   would violate the contract rather than satisfy it.
+
+The honest consequence: the plugin's **private** state (assigned roles, token budgets) has no client-visible
+surface, so those chips need a **Remote domain** (typert registration) of the plugin's own. What the strip
+*does* show live is the task→role reservation, read from the built-in `agentTeam` session projection via the
+dock slot's `useProjection` prop — the same task records the Host guard enforces, so no RPC is involved.
+
+---
+
+## F-19 · `spawn_teammate` does not inherit conversation history — VERIFIED
+
+The design assumption "a forked teammate continues the conversation" is **false in practice**, and it is a
+real communication cost: a Team member starts with no knowledge of what the Lead and the user have discussed.
+
+Measured A/B on the same three graded recall questions:
+
+| Path | Result |
+|---|---|
+| `subagent_fork` | **Inherits.** Recalled the package name, quoted the user's word `黄色`, cited `.ro-reserved{color:var(--dsw-alias-state-warn-primary)}` from `client.js`, and restated the Lead's own earlier remarks |
+| `spawn_teammate` (default `fresh`) | No history — reported only its assigned role |
+| `spawn_teammate` with `context: 'fork'` | **No history** — all three answers `UNKNOWN`, self-reported as "only the teammate setup reminders and my own `<role-context>` block" |
+
+The capability exists at the *provider* level, which makes the gap precise. The fork provider seeds the child
+with the parent's balanced prefix:
+
+```js
+function completedTurnPrefix(parent) {
+  const events = parent.session.snapshotEvents()
+  const lastEnd = events.findLast((e) => e.type === 'turn/end')
+  return lastEnd === undefined ? [] : events.slice(0, lastEnd.seq + 1)
+}
+// ForkInProcessProvider: inheritsParentContext = true
+```
+
+and the Team service does route through it — `spawnTeammate` calls
+`ctx.subagents.startContinuable({ provider: request.provider, … })` and the member is a continuable child with
+`header.parentSession === root.id`. So the seed is prepared; it simply does not reach a **durable Team
+member's** assembled prompt, which is the team-protocol briefing plus the role context.
+
+Practical consequences:
+
+- Work that needs the conversation uses **`subagent_fork`** (one-shot delegation, no shared task board).
+- Work that needs durability uses **`spawn_teammate`**, and the Lead must **write the briefing into the spawn
+  prompt** — history will not carry.
+- A plugin cannot fix this: the member's prompt template is Host-owned, and altering it would violate the
+  project's "do not modify DSH itself" constraint. The reachable mitigation is to put more briefing into the
+  role context the plugin *does* control.
+
+---
+
 ## Acceptance criteria re-check
 
 | # | Criterion | Status |
 |---|---|---|
 | 1 | Current session acts as Lead | **Already native** — the built-in Agent Teams profile provides it; no plugin needed |
-| 2 | Concurrent claim → exactly one winner | **Already native** — transactional revision CAS; the plugin adds policy on top |
-| 3 | Different roles see different context; tokens drop | Implemented per-role `section()` + tool restriction + per-message elision under a real budget |
-| 4 | High-risk operation requires human approval | Implemented via `ask` (default) or inline `ctx.approval.request` |
-| 5 | State changes shown live in the Web UI | **Not implemented** — needs a Client half (slot registration); out of the Host-only scope of this bundle |
+| 2 | Concurrent claim → exactly one winner | **Already native** — transactional revision CAS; the plugin adds policy on top. Verified empirically: 6 concurrent claims → exactly one winner |
+| 3 | Different roles see different context; tokens drop | Implemented per-role `section()` + tool restriction + per-message elision under a real budget. Measured: 5 distinct sections, 70–80 % reduction on an oversized message |
+| 4 | High-risk operation requires human approval | Implemented via `ask` (default) or inline `ctx.approval.request`; both modes covered by tests |
+| 5 | State changes shown live in the Web UI | **Verified for reservations** — the browser half is a live slot occupant (`role-orchestrator`, order 30, `active`), and after its source was corrected to the client-visible `agentTeam` projection the operator observed it rendering `1 成员 · 1 预留 · task-1 → 验证Agent` for a marked task. Role/budget chips still need a Remote domain (F-17/F-18) |

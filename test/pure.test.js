@@ -108,6 +108,30 @@ test('risk-rules: destructive shell and credential patterns are high risk', () =
   assert.equal(evaluateRisk('pwsh', { command: 'Get-ChildItem' }, section).level, 'low')
 })
 
+test('risk-rules: deleting a shared task is high risk, other updates are not', () => {
+  const section = { highRiskTools: [], mediumRiskTools: [], extraRules: [] }
+  const update = (action) => ({ task_id: 't1', expected_revision: 1, action })
+
+  assert.equal(evaluateRisk('team_task_update', update('delete'), section).level, 'high')
+  assert.equal(evaluateRisk('team_task_update', update('reassign'), section).level, 'medium')
+
+  // Ordinary board traffic must stay ungated: a bare tool-name rule here would
+  // have made every status update require approval.
+  assert.equal(evaluateRisk('team_task_update', update('claim'), section).level, 'low')
+  assert.equal(evaluateRisk('team_task_update', update('complete'), section).level, 'low')
+  assert.equal(evaluateRisk('team_task_update', update('edit'), section).level, 'low')
+  assert.equal(evaluateRisk('team_task_create', { subject: 'x' }, section).level, 'low')
+})
+
+test('risk-rules: the deletion rule matches regardless of argument key order', () => {
+  const section = { highRiskTools: [], mediumRiskTools: [], extraRules: [] }
+  assert.equal(
+    evaluateRisk('team_task_update', { action: 'delete', task_id: 't1', expected_revision: 2 }, section)
+      .level,
+    'high',
+  )
+})
+
 test('risk-rules: plugin_manager and member removal are high risk', () => {
   const section = { highRiskTools: [], mediumRiskTools: [], extraRules: [] }
   assert.equal(evaluateRisk('plugin_manager', { action: 'install_bundle' }, section).level, 'high')

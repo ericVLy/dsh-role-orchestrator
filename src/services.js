@@ -31,3 +31,58 @@ export function serviceOf(ctx, name) {
     return undefined
   }
 }
+
+/**
+ * Run `callback(service)` as soon as `name` is available, and return a disposer.
+ *
+ * This matters because of plugin activation order: a plugin that declares no
+ * `inject` may have `apply()` called **before** the service it needs has been
+ * provided by another plugin's fiber. `ctx.get(name)` ("read a service from the
+ * store without the inject requirement") returns `undefined` in that window —
+ * it neither throws nor waits — so an apply-time service read silently does
+ * nothing forever.
+ *
+ * `ctx.inject(deps, callback)` defers the callback until the dependency is
+ * ready, which is the documented fix. When `inject` is unavailable (unit-test
+ * doubles), the callback runs immediately against the current context.
+ *
+ * @param {*} ctx
+ * @param {string} name
+ * @param {(service: any) => (void | (() => void))} callback
+ * @returns {() => void} disposer for both the registration and the fiber
+ */
+export function whenService(ctx, name, callback) {
+  const run = (target) => {
+    const service = serviceOf(target, name)
+    if (service === undefined) return () => {}
+    const dispose = callback(service)
+    return typeof dispose === 'function' ? dispose : () => {}
+  }
+
+  if (ctx && typeof ctx.inject === 'function') {
+    let inner = () => {}
+    let handle
+    try {
+      handle = ctx.inject([name], (scoped) => {
+        inner = run(scoped)
+      })
+    } catch {
+      return run(ctx)
+    }
+    return () => {
+      try {
+        inner()
+      } catch {
+        /* teardown must not throw */
+      }
+      try {
+        if (handle && typeof handle.dispose === 'function') handle.dispose()
+        else if (typeof handle === 'function') handle()
+      } catch {
+        /* teardown must not throw */
+      }
+    }
+  }
+
+  return run(ctx)
+}

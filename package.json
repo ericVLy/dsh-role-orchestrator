@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Role-scoped context compression, single-owner task guard, and human approval gate for DeepSeek Harness.",
+  "description": "Role-scoped context compression, single-owner task guard, human approval gate, and role orchestration for DeepSeek Harness.",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "index.js",
+    "client.js",
     "src",
+    "scripts",
     "locale",
     "test",
     "cordis.patch.yml",
@@ -21,13 +24,18 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
     }
   },
   "meta": {
     "title": "Role Orchestrator",
-    "description": "Per-role context budgets, single-owner task claims, and human approval for high-risk tools."
+    "description": "Per-role context budgets, single-owner task claims, human approval, and role assignment for high-risk work."
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "report": "node scripts/token-report.mjs"
   }
 }

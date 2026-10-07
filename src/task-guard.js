@@ -21,7 +21,7 @@
  */
 
 import { classifyOwnership, readTaskId } from './ownership.js'
-import { serviceOf } from './services.js'
+import { serviceOf, whenService } from './services.js'
 
 /**
  * @param {import('@deepseek-ai/cordis').Context} ctx
@@ -68,25 +68,27 @@ export function registerTaskGuard(ctx, config, deps) {
   // rejects. It is synchronous (`(exec) => string | undefined`), which suffices
   // because the team ledger's read path `agentTeams.getTask` is synchronous too.
   if (section.strict) {
-    const tools = serviceOf(ctx, 'tools')
-    if (tools && typeof tools.guard === 'function') {
-      const disposeGuard = tools.guard((execution) => {
-        try {
-          if (!claimTools.has(execution.name)) return undefined
-          const taskId = readTaskId(execution.arguments)
-          if (typeof taskId !== 'string') return undefined
-          const teams = serviceOf(ctx, 'agentTeams')
-          if (!teams || typeof teams.getTask !== 'function') return undefined
-          const task = teams.getTask(execution.agent, taskId)
-          const ownership = classifyOwnership(task, execution.agent, ownershipFields)
-          if (ownership.state !== 'other') return undefined
-          return `team task "${taskId}" is already owned by "${ownership.owner}" (single-owner invariant).`
-        } catch {
-          return undefined
-        }
-      })
-      if (typeof disposeGuard === 'function') disposers.push(disposeGuard)
-    }
+    // `whenService`, because apply() may run before the tool registry exists.
+    disposers.push(
+      whenService(ctx, 'tools', (tools) => {
+        if (typeof tools.guard !== 'function') return () => {}
+        return tools.guard((execution) => {
+          try {
+            if (!claimTools.has(execution.name)) return undefined
+            const taskId = readTaskId(execution.arguments)
+            if (typeof taskId !== 'string') return undefined
+            const teams = serviceOf(ctx, 'agentTeams')
+            if (!teams || typeof teams.getTask !== 'function') return undefined
+            const task = teams.getTask(execution.agent, taskId)
+            const ownership = classifyOwnership(task, execution.agent, ownershipFields)
+            if (ownership.state !== 'other') return undefined
+            return `team task "${taskId}" is already owned by "${ownership.owner}" (single-owner invariant).`
+          } catch {
+            return undefined
+          }
+        })
+      }),
+    )
   }
 
   return () => {
@@ -154,7 +156,11 @@ function evaluateClaim(ctx, config, deps, exec) {
   }
 
   // 3. Role binding: only the role a task is reserved for may claim it.
-  const requiredRole = readRequiredRole(task, taskId, config)
+  //    Reservations may be static config, an observed orchestration reservation,
+  //    or a `[role:X]` marker in the task text.
+  const requiredRole = deps.requiredRoleFor
+    ? deps.requiredRoleFor(task)
+    : readRequiredRole(task, taskId, config)
   if (typeof requiredRole === 'string' && requiredRole.length > 0) {
     const { role } = deps.resolveRoleFor(caller)
     if (role !== requiredRole) {
